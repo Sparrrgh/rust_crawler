@@ -133,6 +133,7 @@ dependencies = [
  "chrono",
  "failure",
  "headless_chrome",
+ "regex",
 ]
 
 [[package]]
