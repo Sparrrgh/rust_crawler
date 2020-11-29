@@ -6,6 +6,7 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+#Too many dependencies imho...
 [dependencies]
 headless_chrome = "0.9.0"
 failure = "0.1.8"
@@ -13,6 +14,8 @@ chrono = "0.4.19"
 regex = "1.4.2"
     
 hyper = "0.13.9"
+hyper-timeout = "0.3"
+hyper-tls = "0.4.3"
 tokio = { version = "0.2", features = ["full"] }
 futures = "0.3.8"
 

@@ -9,10 +9,13 @@ use regex::Regex;
 use hyper::{Client, StatusCode};
 use tokio::{fs,task};
 use futures::future::join_all;
+use hyper_tls::HttpsConnector;
+use hyper_timeout::TimeoutConnector;
+use std::time::Duration;
 
 fn screenshot_site(tab: Arc<Tab>, site: String, path: String) -> Result<(),failure::Error>{
     let re = Regex::new(r"^(https|http)://")?;
-    let png_data = tab.set_default_timeout(std::time::Duration::from_secs(5))
+    let png_data = tab.set_default_timeout(Duration::from_secs(5))
         .navigate_to(&site)?
         .capture_screenshot(ScreenshotFormat::PNG, None, true)?;
     let finpath = format!("{}/{}{}.png", path, re.replace(&site, ""),Local::now());
@@ -22,26 +25,20 @@ fn screenshot_site(tab: Arc<Tab>, site: String, path: String) -> Result<(),failu
 }
 
 async fn visit_site(site: String) -> Result<String,failure::Error>{
-    //Watch out, this does not support HTTPS
-    //TODO: Support HTTPS
-    let client : Client<hyper::client::HttpConnector> = Client::builder()
-        .pool_idle_timeout(std::time::Duration::from_secs(5))
-        .http2_only(false)
-        .build_http();
-    //Can I set a timeout? Because if the page doesn't respond it will take a fuckton of time for it to realize
-    let uri = site.parse()?;    
-    let resp = match client.get(uri).await{
+    let https = HttpsConnector::new();
+    let mut connector = TimeoutConnector::new(https);
+    connector.set_connect_timeout(Some(Duration::from_secs(5)));
+    connector.set_read_timeout(Some(Duration::from_secs(5)));
+    connector.set_write_timeout(Some(Duration::from_secs(5)));
+    let client = Client::builder().build::<_, hyper::Body>(connector);
+    let uri = site.parse()?;
+    //TODO: Tell user when an endpoint had a timeout
+    let _resp = match client.get(uri).await{
         Ok(x) => x,
         Err(..) => return Ok(String::from(""))
     };
     println!("Visited site {}", site);
-    //There are a lot more interesting things I can check actually. Maybe instead of checkinf if it's 200 I should check
-    //if it's connecting
-    if resp.status() == StatusCode::OK{
-        Ok(site)
-    } else {
-        Ok(String::from(""))
-    }
+    Ok(site)
 }
 
 #[tokio::main]
@@ -69,10 +66,10 @@ async fn screenshot_block(endpoints: Vec<String>, path: String) -> Result<(),fai
     //TODO: Catch crash
     println!("Screenshotting responding endpoints");
     for r in res_e{
-        let new_tab = browser.new_tab()?;
+        let new_tab = browser.new_tab();
         let cpath = path.clone();
         let _ = task::spawn_blocking(|| {
-            let _ = screenshot_site(new_tab,r,cpath);
+            let _ = screenshot_site(new_tab.unwrap(),r,cpath);
         }).await;
     }
     Ok(())
