@@ -17,10 +17,11 @@ fn screenshot_site(tab: Arc<Tab>, site: String, path: String) -> Result<(),failu
     let re = Regex::new(r"^(https?)://")?;
     let png_data = tab.set_default_timeout(Duration::from_secs(5))
     .navigate_to(&site)?
+    .wait_until_navigated()?
     .capture_screenshot(ScreenshotFormat::PNG, None, true)?;
     //Replace http(s), to not break the filename
-    let finpath = format!("{}/{}{}.png", path, re.replace(&site, ""),Local::now());
-    println!("{}", finpath);
+    let finpath = format!("{}/{}-{}.png", path, re.replace(&site, ""),Local::now());
+    // println!("{}", finpath);    
     //TODO: Use tokio fs
     let _ = write(finpath, png_data)?;
     Ok(())
@@ -36,7 +37,7 @@ async fn visit_site(site: String, browser: Arc<Mutex<Browser>>, path: String) ->
     let uri = site.parse()?;
     let _resp = match client.get(uri).await{
         Ok(..) => {
-            println!("Visiting {}", &site);
+            // println!("Visiting {}", &site);
             //Unlock the browser's mutex, create a new tab and use it to screenshot the page
             let tab = browser.lock().unwrap().new_tab().unwrap();
             let _ = task::spawn_blocking(|| {
@@ -71,10 +72,10 @@ async fn screenshot_block(endpoints: Vec<String>, path: String) -> Result<(),fai
 fn main() {
     let args: Vec<String> = env::args().collect();
     let mut endpoints: Vec<String> = vec![];
-    let path = if args.len() < 2 {
-        println!("Usage: ./crawler endpoints directory");
+    let path = if args.len() < 3 || args.len() > 4{  
+        println!("Usage:  ./crawler endpoints_file directory\n\t./crawler start_address_block end_address_block directory");
         process::exit(-1);
-    } else {
+    } else if args.len() == 3{
         let file = File::open(args[1].to_string());
         let file = match file{
             Ok(file) => file,
@@ -84,6 +85,56 @@ fn main() {
             endpoints.push(line.unwrap());
         }
         args[2].to_string()
+    } else {
+        //Give the user the ability to test from an IP address to another
+        let ip1_str =  args[1].to_string();
+        let ip2_str =  args[2].to_string();
+        let verify_ip = |ip : String| -> Vec<u8> { 
+            ip.split(".")
+                .map(|x| x.parse::<u8>().unwrap())
+                .filter(|x| *x < 255 as u8)
+                .collect::<Vec<u8>>()
+        };
+        let ip1  = verify_ip(ip1_str);
+        let ip2  = verify_ip(ip2_str);
+        //This will crash in case there was one 255 in the previous ip!
+        for i in (0..4).step_by(3) {
+            if ip1[i] == 0 || ip2[i] == 0 {
+                println!("Invalid IP address");
+                process::exit(-1);
+            }
+        }
+        let base : u32 = 256;
+        let mut ndiff : u32 = 0;
+        let mut curr_ip = [0 as u8; 4];
+        //Calculate difference between the ip addresses 
+        for i in 0..4{
+            ndiff += ((ip1[i] ^ ip2[i]) as u32) * base.pow((i as u32)^3);
+            //I'm filling the array here to take advantage of the loop
+            curr_ip[i] = ip1[i];
+        }
+        println!("{} endpoints to test\nGenerating endpoint list...", ndiff-1);
+        let build_url = |arr: [u8; 4]| -> String { format!("http://{}.{}.{}.{}",arr[0], arr[1], arr[2], arr[3])};
+        let mut a = 1;
+        //I don't like it, but the first ip must be pushed. There must be a better way but I'm lazy
+        endpoints.push(build_url(curr_ip));
+        while a < ndiff-1{
+            curr_ip[3] += 1;
+            a += 1;
+            //Check if the address is invalid
+            for b in (0..4).rev(){
+                if curr_ip[b] == 255{
+                    if b != 0 {
+                        curr_ip[b] = if b == 3 {1} else {0};
+                        curr_ip[b-1] += 1;
+                    }
+                    a += if b == 3 {2} else {base.pow((b as u32)^3)};
+                }
+            }
+            endpoints.push(build_url(curr_ip));
+        }
+        args[3].to_string()
     };
+    println!("List generated, visting endpoints...");
     let _ = screenshot_block(endpoints, path);
 }
