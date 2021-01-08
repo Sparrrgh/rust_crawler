@@ -7,8 +7,8 @@ use std::{process,env};
 use futures::future::join_all;
 use std::sync::{Arc,Mutex};
 use regex::Regex;
-use hyper::{Client};
-use tokio::{fs,task};
+use hyper::Client;
+use tokio::task;
 use hyper_tls::HttpsConnector;
 use hyper_timeout::TimeoutConnector;
 use std::time::Duration;
@@ -21,8 +21,7 @@ fn screenshot_site(tab: Arc<Tab>, site: String, path: String) -> Result<(),failu
     .capture_screenshot(ScreenshotFormat::PNG, None, true)?;
     //Replace http(s), to not break the filename
     let finpath = format!("{}/{}-{}.png", path, re.replace(&site, ""),Local::now());
-    // println!("{}", finpath);    
-    //TODO: Use tokio fs
+    // println!("{}", finpath);
     let _ = write(finpath, png_data)?;
     Ok(())
 }
@@ -73,7 +72,7 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let mut endpoints: Vec<String> = vec![];
     let path = if args.len() < 3 || args.len() > 4{  
-        println!("Usage:  ./crawler endpoints_file directory\n\t./crawler start_address_block end_address_block directory");
+        println!("Usage:  ./crawler endpoints_file output_directory\n\t./crawler start_address_block end_address_block output_directory");
         process::exit(-1);
     } else if args.len() == 3{
         let file = File::open(args[1].to_string());
@@ -87,8 +86,8 @@ fn main() {
         args[2].to_string()
     } else {
         //Give the user the ability to test from an IP address to another
-        let ip1_str =  args[1].to_string();
-        let ip2_str =  args[2].to_string();
+        let ip1_str = args[1].to_string();
+        let ip2_str = args[2].to_string();
         let verify_ip = |ip : String| -> Vec<u8> { 
             ip.split(".")
                 .map(|x| x.parse::<u8>().unwrap())
@@ -97,7 +96,7 @@ fn main() {
         };
         let ip1  = verify_ip(ip1_str);
         let ip2  = verify_ip(ip2_str);
-        //This will crash in case there was one 255 in the previous ip!
+        //TODO: Catch the crash in case there was any 255 in the input ip!
         for i in (0..4).step_by(3) {
             if ip1[i] == 0 || ip2[i] == 0 {
                 println!("Invalid IP address");
@@ -105,20 +104,30 @@ fn main() {
             }
         }
         let base : u32 = 256;
-        let mut ndiff : u32 = 0;
         let mut curr_ip = [0 as u8; 4];
-        //Calculate difference between the ip addresses 
+        let mut last_ip = [0 as u8; 4];
+        //Convert an array of 4 u8 to a u32
+        let as_u32 = |array : &[u8; 4]| -> u32 {
+            let mut res : u32 = 0;
+            for i in 0..4{
+                res |= (array[i] as u32) <<  8*(i^3);
+            }
+            res
+        };
+        //Convert vectors to arrays
         for i in 0..4{
-            ndiff += ((ip1[i] ^ ip2[i]) as u32) * base.pow((i as u32)^3);
-            //I'm filling the array here to take advantage of the loop
             curr_ip[i] = ip1[i];
+            last_ip[i] = ip2[i];
         }
-        println!("{} endpoints to test\nGenerating endpoint list...", ndiff-1);
+        //Calculate difference between the ip addresses 
+        //+1 to comprehend the last ip of the block
+        let ndiff = as_u32(&last_ip) - as_u32(&curr_ip) + 1;
+        println!("{} endpoints to test\nGenerating endpoint list...", ndiff);
         let build_url = |arr: [u8; 4]| -> String { format!("http://{}.{}.{}.{}",arr[0], arr[1], arr[2], arr[3])};
         let mut a = 1;
         //I don't like it, but the first ip must be pushed. There must be a better way but I'm lazy
         endpoints.push(build_url(curr_ip));
-        while a < ndiff-1{
+        while a < ndiff{
             curr_ip[3] += 1;
             a += 1;
             //Check if the address is invalid
@@ -128,6 +137,7 @@ fn main() {
                         curr_ip[b] = if b == 3 {1} else {0};
                         curr_ip[b-1] += 1;
                     }
+                    //Skip broadcast blocks
                     a += if b == 3 {2} else {base.pow((b as u32)^3)};
                 }
             }
