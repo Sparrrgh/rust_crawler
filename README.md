@@ -1,5 +1,5 @@
-I created this tool solely as an exercise to familiarize myself with parallel programming in Rust.
-It simply scans networks searching for webservers and, when it finds one, it screenshots the landing page.
+I created this tool solely as an exercise to familiarize myself with parallel programming in Rust.  
+It simply **scans** networks searching for webservers and, when it finds one, it **screenshots** the landing page.
 
 The final objective is to scan a /16 subnet in less than 15 minutes searching for webservers and screenshot whenever I encounter one.
 
@@ -12,6 +12,7 @@ Usage:  ./crawler endpoints_file output_directory
 Example:  
 `./crawler 192.168.0.1 192.168.254.254 my_local_network`
 <br>
-*** Why is it called "crawler" if it doesn't actually crawl webpages?
+### Why is it called "crawler" if it doesn't actually crawl webpages?
 Because I'm bad at naming stuff, maybe I'll implement an actual crawler in the future but as of right now it's outside of the scope of the project.  
+<br>
 I would also like to add the possibility to test non-standard ports, but I'm too busy with exams atm.
