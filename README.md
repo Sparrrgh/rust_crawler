@@ -1,7 +1,7 @@
 I created this tool solely as an exercise to familiarize myself with parallel programming in Rust.  
 It simply **scans** networks searching for webservers and, when it finds one, it **screenshots** the landing page.
 
-The final objective is to scan a /16 subnet in less than 15 minutes searching for webservers and screenshot whenever I encounter one.
+The final objective is to scan a /16 subnet in less than 15 minutes.
 
 It has two modes, one uses file containing the endpoints to test (one for each line). The other mode tests an address block given the start and the end of the block. 
 **Watch out!** the endpoints tested using the IP address block comprehend both the starting and the trailing IP.  
