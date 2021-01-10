@@ -111,13 +111,13 @@ fn main() {
         };
         let ip1 = verify_ip(ip1_str);
         let ip2 = verify_ip(ip2_str);
-        if ip1.iter().count() != 4 || ip1.iter().count() != 4{
+        if ip1.iter().count() != 4 || ip1.iter().count() != 4 {
             println!("Invalid IP address");
             process::exit(-1);
         }
         //Convert vectors to arrays
-        let mut curr_ip = [0_u8;4];
-        let mut last_ip = [0_u8;4];
+        let mut curr_ip = [0_u8; 4];
+        let mut last_ip = [0_u8; 4];
         curr_ip[..4].clone_from_slice(&ip1[..4]);
         last_ip[..4].clone_from_slice(&ip2[..4]);
         for i in (0..4).step_by(3) {
