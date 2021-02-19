@@ -1,16 +1,16 @@
 use chrono::Local;
 use futures::future::join_all;
 use headless_chrome::{protocol::page::ScreenshotFormat, Browser, LaunchOptionsBuilder, Tab};
-use hyper::Client;
-use hyper_timeout::TimeoutConnector;
-use hyper_tls::HttpsConnector;
 use regex::Regex;
 use std::fs::{create_dir, write, File};
 use std::io::{self, BufRead};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, process};
+use tokio::net::TcpSocket;
 use tokio::task;
+use tokio::time::timeout;
 
 fn screenshot_site(tab: Arc<Tab>, site: String, path: String) -> Result<(), failure::Error> {
     let re = Regex::new(r"^(https?)://")?;
@@ -19,7 +19,7 @@ fn screenshot_site(tab: Arc<Tab>, site: String, path: String) -> Result<(), fail
         .navigate_to(&site)?
         .wait_until_navigated()?
         .capture_screenshot(ScreenshotFormat::PNG, None, true)?;
-    //Replace http(s), to not break the filename
+    //Replace http(s)://, to not break the filename
     let finpath = format!("{}/{}-{}.png", path, re.replace(&site, ""), Local::now());
     // println!("{}", finpath);
     let _ = write(finpath, png_data)?;
@@ -27,40 +27,30 @@ fn screenshot_site(tab: Arc<Tab>, site: String, path: String) -> Result<(), fail
 }
 
 async fn visit_site(
-    site: String,
+    endpoint: SocketAddr,
     browser: Arc<Mutex<Browser>>,
     path: String,
 ) -> Result<(), failure::Error> {
-    //Set timeouts for hyper-timeout
-    let mut connector = TimeoutConnector::new(HttpsConnector::new());
-    connector.set_connect_timeout(Some(Duration::from_secs(5)));
-    connector.set_read_timeout(Some(Duration::from_secs(10)));
-    connector.set_write_timeout(Some(Duration::from_secs(10)));
-    let client = Client::builder().build::<_, hyper::Body>(connector);
-    let uri = site.parse()?;
-    let _resp = match client.get(uri).await {
-        Ok(..) => {
-            // println!("Visiting {}", &site);
-            //Unlock the browser's mutex, create a new tab and use it to screenshot the page
-            let tab = browser.lock().unwrap().new_tab().unwrap();
-            let _ = task::spawn_blocking(|| {
-                let _ = screenshot_site(tab, site, path);
-            })
-            .await;
-        }
-        //This code sucks and probably the perf is horrible, but I couldn't find how to match io::ErrorKind::TimedOut
-        //TODO: Find a way to use `io::ErrorKind::TimedOut`
-        Err(e) => {
-            if e.into_cause().unwrap().to_string() == "deadline has elapsed" {
-                println!("{} timed out", &site)
-            }
-        }
-    };
+    let socket = TcpSocket::new_v4()?;
+    if timeout(Duration::from_secs(2), socket.connect(endpoint))
+        .await
+        .is_ok()
+    {
+        println!("Screenshotting {}", &endpoint);
+        //Unlock the browser's mutex, create a new tab and use it to screenshot the page
+        let tab = browser.lock().unwrap().new_tab().unwrap();
+        //[TODO] What if it's HTTPS? I should test both
+        let site_s = format!("http://{}", endpoint);
+        let _ = task::spawn_blocking(|| {
+            let _ = screenshot_site(tab, site_s, path);
+        })
+        .await;
+    }
     Ok(())
 }
 
 #[tokio::main]
-async fn screenshot_block(endpoints: Vec<String>, path: String) -> Result<(), failure::Error> {
+async fn screenshot_block(endpoints: Vec<SocketAddr>, path: String) -> Result<(), failure::Error> {
     let browser = Browser::new(LaunchOptionsBuilder::default().build().unwrap())?;
     let arc_browser = Arc::new(Mutex::new(browser));
     let mut fut = vec![];
@@ -81,8 +71,9 @@ async fn screenshot_block(endpoints: Vec<String>, path: String) -> Result<(), fa
 }
 
 fn main() {
+    //TODO Add port range/list
     let args: Vec<String> = env::args().collect();
-    let mut endpoints: Vec<String> = vec![];
+    let mut endpoints: Vec<SocketAddr> = vec![];
     let path = if args.len() < 3 || args.len() > 4 {
         println!("Usage:  ./crawler endpoints_file output_directory\n\t./crawler start_address_block end_address_block output_directory");
         process::exit(-1);
@@ -96,11 +87,11 @@ fn main() {
             }
         };
         for line in io::BufReader::new(file).lines() {
-            endpoints.push(line.unwrap());
+            endpoints.push(line.unwrap().parse().unwrap());
         }
         args[2].to_string()
     } else {
-        //Give the user the ability to test from an IP address to another
+        //Test range of ip addresses
         let ip1_str = args[1].to_string();
         let ip2_str = args[2].to_string();
         let verify_ip = |ip: String| -> Vec<u8> {
@@ -139,12 +130,10 @@ fn main() {
         //+1 to comprehend the last ip of the block
         let ndiff = as_u32(&last_ip) - as_u32(&curr_ip) + 1;
         println!("{} endpoints to test\nGenerating endpoint list...", ndiff);
-        let build_url = |arr: [u8; 4]| -> String {
-            format!("http://{}.{}.{}.{}", arr[0], arr[1], arr[2], arr[3])
-        };
         let mut a = 1;
+        //[TODO] Do while?
         //I don't like it, but the first ip must be pushed. There must be a better way but I'm lazy
-        endpoints.push(build_url(curr_ip));
+        endpoints.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(curr_ip)), 80));
         while a < ndiff {
             curr_ip[3] += 1;
             a += 1;
@@ -159,7 +148,7 @@ fn main() {
                     a += if b == 3 { 2 } else { base.pow((b as u32) ^ 3) };
                 }
             }
-            endpoints.push(build_url(curr_ip));
+            endpoints.push(SocketAddr::new(IpAddr::V4(Ipv4Addr::from(curr_ip)), 80));
         }
         args[3].to_string()
     };
