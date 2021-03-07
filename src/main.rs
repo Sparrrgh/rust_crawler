@@ -1,16 +1,16 @@
 use chrono::Local;
-use futures::future::join_all;
-use headless_chrome::{protocol::page::ScreenshotFormat, Browser, LaunchOptionsBuilder, Tab};
+use fantoccini::{Client, ClientBuilder};
+use futures::{future::join_all, lock::Mutex};
 use regex::Regex;
+use serde_json::json;
 use std::fs::{create_dir, write, File};
 use std::io::{self, BufRead};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{env, process};
-use tokio::net::TcpSocket;
-use tokio::task;
-use tokio::time::timeout;
+use tokio::{net::TcpSocket, task, time::timeout};
+use webdriver::capabilities::Capabilities;
 
 fn get_range_sockets(curr_ip: [u8; 4], last_ip: [u8; 4], portlist: Vec<u16>) -> Vec<SocketAddr> {
     let mut endpoints: Vec<SocketAddr> = vec![];
@@ -56,35 +56,32 @@ fn get_range_sockets(curr_ip: [u8; 4], last_ip: [u8; 4], portlist: Vec<u16>) -> 
     endpoints
 }
 
-fn screenshot_endpoint(
-    tab: Arc<Tab>,
+async fn screenshot_endpoint(
+    client: Arc<Mutex<Client>>,
     endpoint: String,
     path: String,
 ) -> Result<(), failure::Error> {
     let re = Regex::new(r"^(https?)://")?;
-    let png_data = tab
-        .set_default_timeout(Duration::from_secs(5))
-        .navigate_to(&endpoint)?
-        .wait_until_navigated()?
-        .capture_screenshot(ScreenshotFormat::PNG, None, true)?;
-    //Replace http(s)://, to not break the filename
+    let mut unlocked_client = client.lock().await;
+    unlocked_client.goto(&endpoint).await?;
+    let png_data = unlocked_client.screenshot().await?;
     let finpath = format!(
         "{}/{}-{}.png",
         path,
         re.replace(&endpoint, ""),
         Local::now()
     );
-    // println!("{}", finpath);
     let _ = write(finpath, png_data)?;
     Ok(())
 }
 
 async fn visit_endpoint(
     endpoint: SocketAddr,
-    browser: Arc<Mutex<Browser>>,
+    client: Arc<Mutex<Client>>,
     path: String,
 ) -> Result<(), failure::Error> {
     let socket = TcpSocket::new_v4()?;
+    //Try and connect, if succeeds try and screenshot using the browser
     if timeout(Duration::from_secs(2), socket.connect(endpoint))
         .await
         .is_ok()
@@ -93,43 +90,67 @@ async fn visit_endpoint(
         //Visiting using both HTTP and HTTPS
         for h in ["http", "https"].iter() {
             //Unlock the browser's mutex, create a new tab and use it to screenshot the page
-            //I'm pretty sure this causes some trouble in case you visit the page with the incorrect protocol...
-            //Probably the connection is closed and subsequently the request using HTTPS won't go through
-            let tab = browser.lock().unwrap().new_tab().unwrap();
+            //[TODO] Using the browser to test both HTTP and HTTPS kills perf, should find a way
+            //to test which one should I use before calling the browser
+            //[TODO] Not only it's slow, but if the first protocol tested fails it will skip the
+            //second
             let endpoint_s = format!("{}://{}", h, &endpoint);
             let cpath = path.clone();
-            let _ = task::spawn_blocking(|| {
-                let _ = screenshot_endpoint(tab, endpoint_s, cpath);
-            })
-            .await;
+            let cclient = client.clone();
+            screenshot_endpoint(cclient, endpoint_s, cpath).await?;
         }
     }
     Ok(())
 }
 
-#[tokio::main]
 async fn screenshot_block(endpoints: Vec<SocketAddr>, path: String) -> Result<(), failure::Error> {
-    let browser = Browser::new(LaunchOptionsBuilder::default().build().unwrap())?;
-    let arc_browser = Arc::new(Mutex::new(browser));
-    let mut fut = vec![];
     //Create directory where the screenshots will be saved
     if create_dir(path.to_string()).is_err() {
         println!("Directory \"{}\" already exists", path);
         process::exit(-1);
     }
+    //[TODO] Startup gecko directly from Rust?
+    let mut cap = Capabilities::new();
+    // I don't care if an endpoint's certificate is not valid, just screenshot it
+    cap.insert("acceptInsecureCerts".to_owned(), json!(true));
+    //[TODO] Timeout should be customizable
+    //Timeout set to 5 seconds
+    cap.insert("timeouts".to_owned(), json!({"pageLoad":5000}));
+    //Firefox only
+    cap.insert(
+        "moz:firefoxOptions".to_owned(),
+        json!({"args":["-headless"]}),
+    );
+    //Create client
+    let mut cbuilder = ClientBuilder::native();
+    cbuilder.capabilities(cap);
+    let mut client = match cbuilder.connect("http://localhost:4444").await {
+        Ok(c) => c,
+        Err(_) => {
+            println!("Could not connect to webdriver");
+            process::exit(-1);
+        }
+    };
+    //Client will be closed manually
+    client.persist().await?;
+    let mut fut = vec![];
+    let arc_client = Arc::new(Mutex::new(client));
     for e in endpoints {
-        let carc_browser = arc_browser.clone();
+        let carc_client = arc_client.clone();
         let cpath = path.clone();
         //Spawn a task for each endpoint to visit, push the future returned in the vector to join later
-        let f = task::spawn(visit_endpoint(e, carc_browser, cpath));
+        let f = task::spawn(visit_endpoint(e, carc_client, cpath));
         fut.push(f);
     }
     let _ = join_all(fut).await;
+    //Close client after we're done
+    arc_client.lock().await.close().await?;
+    println!("Client closed, scan finished");
     Ok(())
 }
 
-fn main() {
-    //TODO Add port range/list
+#[tokio::main]
+async fn main() {
     let args: Vec<String> = env::args().collect();
     let mut endpoints: Vec<SocketAddr> = vec![];
     let mut path: String = String::default();
@@ -187,5 +208,5 @@ fn main() {
         endpoints = get_range_sockets(curr_ip, last_ip, portlist);
     };
     println!("List generated, visting endpoints...");
-    let _ = screenshot_block(endpoints, path);
+    let _ = screenshot_block(endpoints, path).await;
 }
