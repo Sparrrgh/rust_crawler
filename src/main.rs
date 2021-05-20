@@ -1,7 +1,5 @@
-use chrono::Local;
 use fantoccini::{Client, ClientBuilder};
 use futures::{future::join_all, lock::Mutex};
-use regex::Regex;
 use serde_json::json;
 use std::fs::{create_dir, write, File};
 use std::io::{self, BufRead};
@@ -56,21 +54,17 @@ fn get_range_sockets(curr_ip: [u8; 4], last_ip: [u8; 4], portlist: Vec<u16>) -> 
     endpoints
 }
 
+//Unlock the browser's mutex, create a new tab and use it to screenshot the page
 async fn screenshot_endpoint(
     client: Arc<Mutex<Client>>,
     endpoint: String,
     path: String,
 ) -> Result<(), failure::Error> {
-    let re = Regex::new(r"^(https?)://")?;
     let mut unlocked_client = client.lock().await;
     unlocked_client.goto(&endpoint).await?;
     let png_data = unlocked_client.screenshot().await?;
-    let finpath = format!(
-        "{}/{}-{}.png",
-        path,
-        re.replace(&endpoint, ""),
-        Local::now()
-    );
+    let finpath = format!("{}/{}.png", path, endpoint.replace("://", "_"));
+    //[TODO] Check existance of file before writing?
     let _ = write(finpath, png_data)?;
     Ok(())
 }
@@ -89,15 +83,13 @@ async fn visit_endpoint(
         println!("Trying to screenshot {}", &endpoint);
         //Visiting using both HTTP and HTTPS
         for h in ["http", "https"].iter() {
-            //Unlock the browser's mutex, create a new tab and use it to screenshot the page
             //[TODO] Using the browser to test both HTTP and HTTPS kills perf, should find a way
             //to test which one should I use before calling the browser
-            //[TODO] Not only it's slow, but if the first protocol tested fails it will skip the
-            //second
             let endpoint_s = format!("{}://{}", h, &endpoint);
             let cpath = path.clone();
             let cclient = client.clone();
-            screenshot_endpoint(cclient, endpoint_s, cpath).await?;
+            //Ignore the panic
+            screenshot_endpoint(cclient, endpoint_s, cpath).await.ok();
         }
     }
     Ok(())
