@@ -63,8 +63,9 @@ async fn screenshot_endpoint(
     let mut unlocked_client = client.lock().await;
     unlocked_client.goto(&endpoint).await?;
     let png_data = unlocked_client.screenshot().await?;
+    //Dropping unlocked mutex, hoping for some perf
+    drop(unlocked_client);
     let finpath = format!("{}/{}.png", path, endpoint.replace("://", "_"));
-    //[TODO] Check existance of file before writing?
     let _ = write(finpath, png_data)?;
     Ok(())
 }
@@ -101,7 +102,6 @@ async fn screenshot_block(endpoints: Vec<SocketAddr>, path: String) -> Result<()
         println!("Directory \"{}\" already exists", path);
         process::exit(-1);
     }
-    //[TODO] Startup gecko directly from Rust?
     let mut cap = Capabilities::new();
     // I don't care if an endpoint's certificate is not valid, just screenshot it
     cap.insert("acceptInsecureCerts".to_owned(), json!(true));
