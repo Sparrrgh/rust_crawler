@@ -147,7 +147,7 @@ async fn main() {
     let mut endpoints: Vec<SocketAddr> = vec![];
     let mut path: String = String::default();
     if args.len() < 3 || args.len() > 5 {
-        println!("Usage:  ./crawler endpoints_file output_directory\n\t./crawler start_address_block end_address_block port1,port2,...,portn output_directory");
+        println!("Usage:  ./webserver_finder endpoints_file output_directory\n\t./webserver_finder start_address_block end_address_block port1,port2,...,portn output_directory");
         process::exit(-1);
     } else if args.len() == 3 {
         //Get ip addresses and ports from file

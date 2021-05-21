@@ -1,5 +1,5 @@
 [package]
-name = "crawler"
+name = "webserver_finder"
 version = "0.1.0"
 authors = ["sparrrgh"]
 edition = "2018"
